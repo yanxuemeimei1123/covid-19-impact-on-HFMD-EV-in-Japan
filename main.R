@@ -1,67 +1,52 @@
-
 library(openxlsx)
 library(readr)
 library(dplyr)
-library(coda)
-library(lubridate)
 library(reshape2)
+library(ggplot2)
+library(odin2)
+library(dust2)
+library(monty)
+library(lubridate)
 
-gen_sir <- odin.dust::odin_dust('sir.R')
+rm(list = ls())
 
-serotype <- 'EV71'
-#                beta_0, beta_s,s_0,  i_0,   p, w, c0,c1,c2
-initial_value <- c(8.5, 0.002, 0.08, 2e-4, 2e-4, 1, 2, 0, 0)
-proposal_matrix <- diag(c(1, 1e-6, 1e-4, 1e-8, 1e-8, 10, 0.1, 0.01, 0.01), 9)
+sero_list <- c('EV71', 'CA16', 'CA6')
+serotype <- sero_list[1]
 
-source('sir_parameters.R')
+gen_sir <- odin('sir.R')
 
-pars <- sir_parameters(serotype = serotype, initial_value = initial_value)
-pars[c(1:13)]
+source('parameters.R')
 
-data_observed <- data_ob(serotype = serotype)
-data_particle <- mcstate::particle_filter_data(data_observed, time = "week.no", rate = 1, initial_time = 0)
 
-source('sir_functions.R')
+packer <- monty_packer(c("beta_0", 'beta_s', 'phi', 's_0', 'i_0', 'p', 'w', 'c_0', 'c_1', "c_2"),
+                       fixed = fixed_pars)
 
-prior_list <- prior(initial_value)
+prior <- monty_dsl({
+  
+  beta_0 ~ Uniform(min = 0, max = 80)
+  beta_s ~ Uniform(min = 0, max = 1)
+  phi ~ Uniform(min = 0, max = 1)
+  s_0 ~ Uniform(min = 0, max = 0.5)
+  i_0 ~ Uniform(min = 0, max = 0.01)
+  p ~ Uniform(min = 0, max = 0.01)
+  # eta ~ Exponential(mean = 1000)
+  w ~ Uniform(min = 0, max = 1000)
+  c_0 ~ Uniform(min = -10, max = 10)
+  c_1 ~ Uniform(min = 0, max = 10)
+  c_2 ~ Uniform(min = 0, max = 10)
+  
+})
 
-mcmc_pars <- mcstate::pmcmc_parameters$new(prior_list, proposal_matrix, transform)
+runner <- monty_runner_callr(4)
 
-mcmc1 <- mcstate::pmcmc(mcmc_pars, filter = deterministic, control = control)
-sum(mcmc(mcmc1))
 
-mcmc2 <- pmcmc(mcmc1, filter = deterministic, n_steps = 5000)
-sum(mcmc(mcmc2))
+filter <- dust_filter_create(gen_sir, data = data, time_start = 0, n_particles = 1000, n_threads = 4)
 
-mcmc3 <- pmcmc(mcmc2, filter = deterministic, n_steps = 5000)
-sum(mcmc(mcmc3))
+likelihood <- dust_likelihood_monty(filter, packer, save_trajectories = TRUE)
+posterior <- likelihood + prior
 
-mcmc4 <- pmcmc(mcmc3, filter = deterministic, n_steps = 5000)
-sum(mcmc(mcmc4))
+sampler <- monty_sampler_random_walk(vcv, rerun_every = 50, rerun_random = TRUE)
+samples <- monty_sample(posterior, sampler, initial = samples, n_steps = 5000, n_chains = 4, runner = runner)
 
-mcmc5 <- pmcmc(mcmc4, filter = deterministic, n_steps = 5000)
-sum(mcmc(mcmc5))
-
-plot(mcmc(mcmc5)[, c(3:12)])
-mcmc_trace(as.data.frame(mcmc(mcmc5))) / mcmc_dens(as.data.frame(mcmc(mcmc5)))
-
-# write_rds(mcmc5, paste0('1mcmc_', serotype, '.rds'))
-
-pmcmc1 <- pmcmc(mcmc0, filter = stochastic, n_steps = 5000)
-sum(mcmc(pmcmc1))
-summary(mcmc(pmcmc1))
-
-pmcmc2 <- pmcmc(pmcmc1, filter = stochastic, n_steps = 5000)
-sum(mcmc(pmcmc2))
-summary(mcmc(pmcmc2))
-
-pmcmc3 <- pmcmc(pmcmc2, filter = stochastic, n_steps = 5000)
-sum(mcmc(pmcmc3))
-summary(mcmc(pmcmc3))
-
-pmcmc4 <- pmcmc(pmcmc3, filter = stochastic, n_steps = 5000)
-sum(mcmc(pmcmc4))
-summary(mcmc(pmcmc4))
-write_rds(pmcmc4, paste0('data/pmcmc_', serotype, '.rds'))
 
 
